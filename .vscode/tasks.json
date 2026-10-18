@@ -1,0 +1,24 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Parley Predictor: dev",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"--prefix",
+				"${workspaceFolder}/parley-predictor",
+				"run",
+				"dev",
+				"--",
+				"--hostname",
+				"127.0.0.1",
+				"--port",
+				"3000"
+			],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
