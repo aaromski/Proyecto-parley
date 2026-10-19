@@ -89,8 +89,8 @@ function errorMessage(code: string, stage?: string): string {
   }
   if (code === "UPSTREAM_TIMEOUT") {
     return stage === "normalization"
-      ? "La normalización agotó el tiempo de espera."
-      : "La evaluación de mercados y reglas agotó el tiempo de espera.";
+      ? "OpenRouter tardó más de 60 segundos en normalizar los datos. Conserva el informe, revisa OPENROUTER_MODEL en el servidor o usa un modelo más rápido y vuelve a intentarlo."
+      : "OpenRouter tardó más de 60 segundos en evaluar los mercados y reglas. Conserva el informe, revisa OPENROUTER_MODEL en el servidor o usa un modelo más rápido y vuelve a intentarlo.";
   }
   if (code === "INVALID_PROVIDER_RESPONSE") {
     return stage === "normalization"
@@ -462,7 +462,7 @@ export default function Home() {
             <section className="panel input-panel" aria-labelledby="input-title">
               <div className="section-heading"><div className="section-title-wrap"><span className="section-index">01</span><div><p className="eyebrow">ENTRADA</p><h2 id="input-title">Datos del partido</h2></div></div><span className="field-limit">Hasta 50.000 caracteres</span></div>
               <label className="sr-only" htmlFor="match-data">Datos del partido</label>
-              <textarea id="match-data" value={rawMatchData} onChange={(event) => { setRawMatchData(event.target.value); setResponse(null); if (inputError) setInputError(""); }} aria-invalid={Boolean(inputError)} aria-describedby={inputError ? "match-error" : "match-hint"} placeholder="Pega aquí los datos disponibles del partido: contexto, estadísticas o notas de análisis." maxLength={ANALYSIS_LIMITS.rawMatchDataCharacters} rows={7} />
+              <textarea id="match-data" value={rawMatchData} onChange={(event) => { setRawMatchData(event.target.value); setResponse(null); if (inputError) setInputError(""); }} aria-invalid={Boolean(inputError)} aria-describedby={inputError ? "match-error" : "match-hint"} placeholder="Pega el informe completo, incluidos encabezados, viñetas, alineaciones y estadísticas." maxLength={ANALYSIS_LIMITS.rawMatchDataCharacters} rows={7} />
               <div className="field-footer"><p id={inputError ? "match-error" : "match-hint"} className={inputError ? "field-error" : "field-hint"}>{inputError || "El texto se conserva solo mientras esta página esté abierta."}</p><span className="character-count" aria-live="polite">{rawMatchData.length.toLocaleString("es-ES")} / 50.000</span></div>
               <div className="selection-strip"><div><p className="eyebrow">SELECCIÓN ACTIVA</p><p className="selection-count"><strong>{activeMarketCount}</strong> mercados <span>/</span> <strong>{activeRuleCount}</strong> reglas</p></div><button className="button button-secondary" type="button" onClick={openConfiguration}>Mercados y reglas</button></div>
               {selectionError && <p className="inline-error" role="alert">{selectionError}</p>}
@@ -484,7 +484,7 @@ export default function Home() {
                 <div className="active-rules"><span className="active-rules-label">Reglas y triggers activos</span>{verdict.activeRules.length ? <ul>{verdict.activeRules.map((rule) => <li key={rule.id}><span>{rule.name}</span><span className="trigger-label">{TRIGGER_LABELS[rule.trigger] ?? rule.trigger}</span></li>)}</ul> : <p>Sin reglas activas en este dictamen.</p>}</div>
               </article>; })}</div>}
               <p className="uncertainty-notice">Las probabilidades son estimaciones sujetas a incertidumbre; no garantizan resultados. El análisis no es asesoramiento financiero ni una recomendación de apuesta. Juega de forma responsable.</p>
-              {response && response.verdicts.length > 0 && <details className="normalized-details"><summary>Consultar datos normalizados recibidos</summary><pre>{JSON.stringify(response.normalizedData, null, 2)}</pre></details>}
+              {response && <details className="normalized-details"><summary>Consultar datos normalizados recibidos</summary><pre>{JSON.stringify(response.normalizedData, null, 2)}</pre></details>}
             </section>
           </section>
 

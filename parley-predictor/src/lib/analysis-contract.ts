@@ -356,21 +356,23 @@ function validateJsonValue(value: unknown, depth: number, count: { value: number
 }
 
 export function parseNormalizedData(value: unknown): NormalizedData {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).length !== 1 ||
-    !isRecord(value.normalizedData) ||
-    !validateJsonValue(value.normalizedData, 0, { value: 0 })
-  ) {
+  if (!isRecord(value)) {
+    throw new ModelResponseValidationError();
+  }
+
+  const normalizedData = Object.prototype.hasOwnProperty.call(value, "normalizedData")
+    ? value.normalizedData
+    : value;
+  if (!isRecord(normalizedData) || !validateJsonValue(normalizedData, 0, { value: 0 })) {
     throw new ModelResponseValidationError();
   }
   if (
-    new TextEncoder().encode(JSON.stringify(value.normalizedData)).byteLength >
+    new TextEncoder().encode(JSON.stringify(normalizedData)).byteLength >
     ANALYSIS_LIMITS.normalizedJsonBytes
   ) {
     throw new ModelResponseValidationError();
   }
-  return removeExcludedMetrics(value.normalizedData as NormalizedData) as NormalizedData;
+  return removeExcludedMetrics(normalizedData as NormalizedData) as NormalizedData;
 }
 
 export function parseModelVerdicts(

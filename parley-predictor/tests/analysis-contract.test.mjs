@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import typescript from "typescript";
 
-const sourcePath = path.resolve("tests/../src/lib/analysis-contract.ts");
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const sourcePath = path.join(projectRoot, "src/lib/analysis-contract.ts");
 const source = readFileSync(sourcePath, "utf8");
 const compiled = typescript.transpileModule(source, {
   compilerOptions: {
@@ -43,4 +45,14 @@ test("normalization removes excluded metrics from objects and arrays", () => {
     corners: 8,
     events: [{ label: "corners", count: 7 }],
   });
+});
+
+test("normalization accepts wrapped or direct JSON objects from the provider", () => {
+  const expected = { match: { fixture: "Juventus vs. Lazio" } };
+
+  assert.deepEqual(
+    parseNormalizedData({ normalizedData: expected, note: "provider metadata" }),
+    expected,
+  );
+  assert.deepEqual(parseNormalizedData(expected), expected);
 });
