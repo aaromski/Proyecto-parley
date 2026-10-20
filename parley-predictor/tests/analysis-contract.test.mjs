@@ -56,3 +56,11 @@ test("normalization accepts wrapped or direct JSON objects from the provider", (
   );
   assert.deepEqual(parseNormalizedData(expected), expected);
 });
+
+test("normalization accepts JSON objects encoded as strings", () => {
+  const expected = { match: { fixture: "Juventus vs. Lazio" } };
+  const encoded = JSON.stringify(expected);
+
+  assert.deepEqual(parseNormalizedData(encoded), expected);
+  assert.deepEqual(parseNormalizedData({ normalizedData: encoded }), expected);
+});

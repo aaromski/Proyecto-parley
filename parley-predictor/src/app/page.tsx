@@ -87,10 +87,13 @@ function errorMessage(code: string, stage?: string): string {
       ? "El proveedor no pudo completar la normalización."
       : "El proveedor no pudo completar la evaluación de mercados y reglas.";
   }
+  if (code === "UPSTREAM_UNAVAILABLE") {
+    return "Gemini está temporalmente ocupado o alcanzó un límite de solicitudes. Espera unos minutos y reintenta.";
+  }
   if (code === "UPSTREAM_TIMEOUT") {
     return stage === "normalization"
-      ? "OpenRouter tardó más de 60 segundos en normalizar los datos. Conserva el informe, revisa OPENROUTER_MODEL en el servidor o usa un modelo más rápido y vuelve a intentarlo."
-      : "OpenRouter tardó más de 60 segundos en evaluar los mercados y reglas. Conserva el informe, revisa OPENROUTER_MODEL en el servidor o usa un modelo más rápido y vuelve a intentarlo.";
+      ? "Gemini tardó más de 150 segundos en normalizar los datos. Conserva el informe, revisa GEMINI_MODEL en el servidor o vuelve a intentarlo."
+      : "Gemini tardó más de 150 segundos en evaluar los mercados y reglas. Conserva el informe, revisa GEMINI_MODEL en el servidor o vuelve a intentarlo.";
   }
   if (code === "INVALID_PROVIDER_RESPONSE") {
     return stage === "normalization"
@@ -466,7 +469,7 @@ export default function Home() {
               <div className="field-footer"><p id={inputError ? "match-error" : "match-hint"} className={inputError ? "field-error" : "field-hint"}>{inputError || "El texto se conserva solo mientras esta página esté abierta."}</p><span className="character-count" aria-live="polite">{rawMatchData.length.toLocaleString("es-ES")} / 50.000</span></div>
               <div className="selection-strip"><div><p className="eyebrow">SELECCIÓN ACTIVA</p><p className="selection-count"><strong>{activeMarketCount}</strong> mercados <span>/</span> <strong>{activeRuleCount}</strong> reglas</p></div><button className="button button-secondary" type="button" onClick={openConfiguration}>Mercados y reglas</button></div>
               {selectionError && <p className="inline-error" role="alert">{selectionError}</p>}
-              <div className="submit-row"><button className="button button-primary" type="button" onClick={() => void analyzeMatch()} disabled={isAnalyzing}>{isAnalyzing ? "Analizando…" : "Analizar partido"}</button><p className="transfer-note">Al analizar, los datos se envían al servidor y se procesan mediante OpenRouter.</p></div>
+              <div className="submit-row"><button className="button button-primary" type="button" onClick={() => void analyzeMatch()} disabled={isAnalyzing}>{isAnalyzing ? "Analizando…" : "Analizar partido"}</button><p className="transfer-note">Al analizar, los datos se envían al servidor y se procesan mediante Gemini.</p></div>
               <p className="service-detail" aria-live="polite">{serviceMessage}</p>
             </section>
 

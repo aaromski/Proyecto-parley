@@ -356,13 +356,27 @@ function validateJsonValue(value: unknown, depth: number, count: { value: number
 }
 
 export function parseNormalizedData(value: unknown): NormalizedData {
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      throw new ModelResponseValidationError();
+    }
+  }
   if (!isRecord(value)) {
     throw new ModelResponseValidationError();
   }
 
-  const normalizedData = Object.prototype.hasOwnProperty.call(value, "normalizedData")
+  let normalizedData = Object.prototype.hasOwnProperty.call(value, "normalizedData")
     ? value.normalizedData
     : value;
+  if (typeof normalizedData === "string") {
+    try {
+      normalizedData = JSON.parse(normalizedData);
+    } catch {
+      throw new ModelResponseValidationError();
+    }
+  }
   if (!isRecord(normalizedData) || !validateJsonValue(normalizedData, 0, { value: 0 })) {
     throw new ModelResponseValidationError();
   }

@@ -16,6 +16,7 @@
 # next.js
 /.next/
 /out/
+/invalid-normalization-response.json
 
 # production
 /build

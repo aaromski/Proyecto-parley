@@ -118,7 +118,7 @@ async function readRequestBody(request: Request): Promise<unknown> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     return errorResponse(
       503,
@@ -139,10 +139,7 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const payload = parseAnalysisRequest(await readRequestBody(request));
-    const configuredModel = process.env.OPENROUTER_MODEL?.trim();
-    const model = configuredModel && configuredModel.toLowerCase() !== "openrouter/auto"
-      ? configuredModel
-      : undefined;
+    const model = process.env.GEMINI_MODEL?.trim() || undefined;
     return analysisStream(payload, apiKey, model);
   } catch (error) {
     if (error instanceof RangeError) {
