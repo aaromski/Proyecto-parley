@@ -12,7 +12,7 @@ Copy-Item .env.example .env.local
 npm run dev
 ```
 
-Abre `http://localhost:3000`. Antes de analizar, configura `OPENROUTER_API_KEY` en `parley-predictor/.env.local`; la clave se usa exclusivamente en el servidor. `OPENROUTER_MODEL` es opcional. No introduzcas claves en la interfaz ni las guardes en el repositorio.
+Abre `http://localhost:3000`. Antes de analizar, configura `OPENROUTER_API_KEY` en `parley-predictor/.env.local`; la clave se usa exclusivamente en el servidor. `OPENROUTER_MODEL` es opcional y por defecto usa `openai/gpt-4.1-mini`. No introduzcas claves en la interfaz ni las guardes en el repositorio.
 
 ## Verificaciones
 

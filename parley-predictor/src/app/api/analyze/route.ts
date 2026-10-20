@@ -139,7 +139,10 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     const payload = parseAnalysisRequest(await readRequestBody(request));
-    const model = process.env.OPENROUTER_MODEL?.trim() || undefined;
+    const configuredModel = process.env.OPENROUTER_MODEL?.trim();
+    const model = configuredModel && configuredModel.toLowerCase() !== "openrouter/auto"
+      ? configuredModel
+      : undefined;
     return analysisStream(payload, apiKey, model);
   } catch (error) {
     if (error instanceof RangeError) {
