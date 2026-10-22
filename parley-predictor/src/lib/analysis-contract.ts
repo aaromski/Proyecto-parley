@@ -8,12 +8,78 @@ export const RULE_TRIGGERS = [
 
 export type RuleTrigger = (typeof RULE_TRIGGERS)[number];
 
+export const MARKET_TYPES = [
+  "corners",
+  "totalGoals",
+  "teamGoals",
+  "handicap",
+  "generic",
+] as const;
+
+export type MarketType = (typeof MARKET_TYPES)[number];
+
+export const FORECAST_TYPES = ["over", "under", "moneyline", "handicap"] as const;
+
+export type ForecastType = (typeof FORECAST_TYPES)[number];
+
+export const MARKET_TEAMS = ["home", "away", "both"] as const;
+
+export type MarketTeam = (typeof MARKET_TEAMS)[number];
+
+export const FORECAST_DECISIONS = ["maintained", "upgraded", "inverted_suggestion"] as const;
+
+export type ForecastDecisionKind = (typeof FORECAST_DECISIONS)[number];
+
+function normalizeDescriptor(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+export function inferMarketType(id: string, name: string, line: string): MarketType {
+  const descriptor = normalizeDescriptor(`${id} ${name} ${line}`);
+  if (/corner|corners/.test(descriptor)) return "corners";
+  if (/total-goals|goles totales/.test(descriptor)) return "totalGoals";
+  if (/individual-goal|gol individual/.test(descriptor)) return "teamGoals";
+  if (/handicap/.test(descriptor)) return "handicap";
+  return "generic";
+}
+
+export function inferForecastType(
+  marketType: MarketType,
+  line: string,
+  name: string,
+): ForecastType {
+  const descriptor = normalizeDescriptor(`${line} ${name}`);
+  if (marketType === "handicap" || descriptor.includes("handicap")) return "handicap";
+  if (/1x2|1x\/x2|moneyline|ganador|victoria|doble oportunidad/.test(descriptor)) return "moneyline";
+  if (/under|menos de|inferior a/.test(descriptor)) return "under";
+  return "over";
+}
+
+export function inferMarketTeam(
+  marketType: MarketType,
+  id: string,
+  name: string,
+  line: string,
+): MarketTeam {
+  const descriptor = normalizeDescriptor(`${id} ${name} ${line}`);
+  if (/visitante|\baway\b/.test(descriptor)) return "away";
+  if (/local|\bhome\b/.test(descriptor)) return "home";
+  if (marketType === "teamGoals" || marketType === "handicap") {
+    if (/^\s*\+/.test(line)) return "away";
+    if (/-/.test(line)) return "home";
+  }
+  return "both";
+}
+
 export type Market = {
   id: string;
   name: string;
   description: string;
   line: string;
   baseCushion: number;
+  marketType: MarketType;
+  forecastType: ForecastType;
+  team: MarketTeam;
 };
 
 export type Rule = {
@@ -47,21 +113,50 @@ export type ActiveRuleMetadata = {
   riskFactor: number;
 };
 
+export type ForecastEvidence = {
+  confirmedStartingWingers: boolean | null;
+  noStartingAttackerAbsences: boolean | null;
+  bothGoalkeepersHighSavesAndGoalsPrevented: boolean | null;
+  opponentConcedesPenalties: boolean | null;
+  opponentBuildUpLosses: number | null;
+};
+
+export type ParsedModelVerdict = {
+  marketId: string;
+  selection: string | null;
+  projection: number | null;
+  probability: number | null;
+  rationale: string;
+  activeRuleIds: string[] | null;
+  team: MarketTeam;
+  evidence: ForecastEvidence;
+};
+
 export type Verdict = {
   marketId: string;
   selection: string;
+  projection: number | null;
+  forecastDecision: ForecastDecisionKind;
   probability: number;
   rationale: string;
   activeRuleIds: string[];
   riskSum: number;
   baseCushion: number;
   adjustedCushion: number;
+  team: MarketTeam;
   activeRules: ActiveRuleMetadata[];
+};
+
+export type DiscardedMarket = {
+  marketId: string;
+  projection: number | null;
+  reason: string;
 };
 
 export type AnalysisResponse = {
   normalizedData: NormalizedData;
   verdicts: Verdict[];
+  discardedMarkets: DiscardedMarket[];
 };
 
 export const ANALYSIS_LIMITS = {
@@ -76,7 +171,7 @@ export const ANALYSIS_LIMITS = {
   instructionsCharacters: 2_000,
   lineCharacters: 100,
   selectionCharacters: 200,
-  rationaleCharacters: 500,
+  rationaleCharacters: 800,
   modelResponseBytes: 1024 * 1024,
   normalizedJsonBytes: 100 * 1024,
 } as const;
@@ -255,18 +350,45 @@ function parseMarkets(value: unknown): Market[] {
     if (!isRecord(item)) {
       throw new ContractValidationError("Invalid market configuration.");
     }
-    assertExactKeys(item, ["id", "name", "description", "line", "baseCushion"]);
+    assertExactKeys(item, ["id", "name", "description", "line", "baseCushion", "marketType", "forecastType", "team"]);
+    const line = requiredString(item.line, "market line", ANALYSIS_LIMITS.lineCharacters);
+    const id = requiredString(item.id, "market id", ANALYSIS_LIMITS.idCharacters);
+    const name = requiredString(item.name, "market name", ANALYSIS_LIMITS.nameCharacters);
+    if (
+      item.marketType !== undefined &&
+      (typeof item.marketType !== "string" || !MARKET_TYPES.includes(item.marketType as MarketType))
+    ) {
+      throw new ContractValidationError("Invalid market type.");
+    }
+    if (
+      item.forecastType !== undefined &&
+      (typeof item.forecastType !== "string" || !FORECAST_TYPES.includes(item.forecastType as ForecastType))
+    ) {
+      throw new ContractValidationError("Invalid forecast type.");
+    }
+    if (
+      item.team !== undefined &&
+      (typeof item.team !== "string" || !MARKET_TEAMS.includes(item.team as MarketTeam))
+    ) {
+      throw new ContractValidationError("Invalid market team.");
+    }
+    const marketType = (item.marketType as MarketType | undefined) ?? inferMarketType(id, name, line);
+    const forecastType = (item.forecastType as ForecastType | undefined) ??
+      inferForecastType(marketType, line, name);
     return {
-      id: requiredString(item.id, "market id", ANALYSIS_LIMITS.idCharacters),
-      name: requiredString(item.name, "market name", ANALYSIS_LIMITS.nameCharacters),
+      id,
+      name,
       description: requiredString(
         item.description,
         "market description",
         ANALYSIS_LIMITS.descriptionCharacters,
         true,
       ),
-      line: requiredString(item.line, "market line", ANALYSIS_LIMITS.lineCharacters),
+      line,
       baseCushion: requiredNumber(item.baseCushion, "baseCushion", 0),
+      marketType,
+      forecastType,
+      team: (item.team as MarketTeam | undefined) ?? inferMarketTeam(marketType, id, name, line),
     };
   });
 
@@ -389,76 +511,82 @@ export function parseNormalizedData(value: unknown): NormalizedData {
   return removeExcludedMetrics(normalizedData as NormalizedData) as NormalizedData;
 }
 
+function parseForecastEvidence(value: unknown): ForecastEvidence {
+  const record = isRecord(value) ? value : {};
+  const booleanValue = (key: string): boolean | null =>
+    typeof record[key] === "boolean" ? record[key] as boolean : null;
+  const losses = record.opponentBuildUpLosses;
+  return {
+    confirmedStartingWingers: booleanValue("confirmedStartingWingers"),
+    noStartingAttackerAbsences: booleanValue("noStartingAttackerAbsences"),
+    bothGoalkeepersHighSavesAndGoalsPrevented: booleanValue("bothGoalkeepersHighSavesAndGoalsPrevented"),
+    opponentConcedesPenalties: booleanValue("opponentConcedesPenalties"),
+    opponentBuildUpLosses:
+      typeof losses === "number" && Number.isFinite(losses) && losses >= 0 ? losses : null,
+  };
+}
+
 export function parseModelVerdicts(
   value: unknown,
   request: AnalysisRequest,
-): Array<Omit<Verdict, "riskSum" | "baseCushion" | "adjustedCushion" | "activeRules">> {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).length !== 1 ||
-    !Array.isArray(value.verdicts) ||
-    value.verdicts.length > ANALYSIS_LIMITS.verdicts
-  ) {
-    throw new ModelResponseValidationError();
+): ParsedModelVerdict[] {
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
   }
+  if (!isRecord(value) || !Array.isArray(value.verdicts)) return [];
 
   const marketIds = new Set(request.markets.map(({ id }) => id));
-  const rulesById = new Map<string, Rule>(
-    request.rules.map((rule) => [rule.id, rule] as const),
-  );
-  return value.verdicts.map((item) => {
-    if (!isRecord(item)) throw new ModelResponseValidationError();
-    const expectedKeys = [
-      "marketId",
-      "selection",
-      "probability",
-      "rationale",
-      "activeRuleIds",
-    ];
-    if (
-      Object.keys(item).length !== expectedKeys.length ||
-      Object.keys(item).some((key) => !expectedKeys.includes(key)) ||
-      typeof item.marketId !== "string" ||
-      !marketIds.has(item.marketId) ||
-      typeof item.probability !== "number" ||
-      !Number.isFinite(item.probability) ||
-      item.probability < 0 ||
-      item.probability > 1 ||
-      !Array.isArray(item.activeRuleIds) ||
-      item.activeRuleIds.length > request.rules.length
-    ) {
-      throw new ModelResponseValidationError();
+  const validRuleIds = new Set(request.rules.map((rule) => rule.id));
+  const seenMarketIds = new Set<string>();
+  const verdicts: ParsedModelVerdict[] = [];
+  for (const candidate of value.verdicts.slice(0, ANALYSIS_LIMITS.verdicts)) {
+    if (!isRecord(candidate) || typeof candidate.marketId !== "string" ||
+      !marketIds.has(candidate.marketId) || seenMarketIds.has(candidate.marketId)) {
+      continue;
     }
-
-    const selection = item.selection;
-    const rationale = item.rationale;
-    if (
-      typeof selection !== "string" ||
-      selection.trim().length === 0 ||
-      selection.length > ANALYSIS_LIMITS.selectionCharacters ||
-      typeof rationale !== "string" ||
-      rationale.trim().length === 0 ||
-      rationale.length > ANALYSIS_LIMITS.rationaleCharacters
-    ) {
-      throw new ModelResponseValidationError();
-    }
-
-    const activeRuleIds = item.activeRuleIds.map((id) => {
-      if (typeof id !== "string" || !rulesById.has(id)) {
-        throw new ModelResponseValidationError();
-      }
-      return id;
-    });
-    if (new Set(activeRuleIds).size !== activeRuleIds.length) {
-      throw new ModelResponseValidationError();
-    }
-
-    return {
-      marketId: item.marketId,
-      selection,
-      probability: item.probability,
-      rationale,
+    seenMarketIds.add(candidate.marketId);
+    const selection = candidate.selection;
+    const projection = candidate.projection;
+    const probability = candidate.probability;
+    const rawRationale = candidate.rationale;
+    const rawRuleIds = candidate.activeRuleIds;
+    const activeRuleIds = Array.isArray(rawRuleIds) &&
+      rawRuleIds.length <= request.rules.length &&
+      rawRuleIds.every((id) => typeof id === "string" && validRuleIds.has(id)) &&
+      new Set(rawRuleIds).size === rawRuleIds.length
+      ? rawRuleIds as string[]
+      : null;
+    const market = request.markets.find((item) => item.id === candidate.marketId);
+    const rawTeam = candidate.team;
+    verdicts.push({
+      marketId: candidate.marketId,
+      selection:
+        typeof selection === "string" && selection.trim().length > 0 &&
+        selection.length <= ANALYSIS_LIMITS.selectionCharacters
+          ? selection.trim()
+          : null,
+      projection:
+        typeof projection === "number" && Number.isFinite(projection) ? projection : null,
+      probability:
+        typeof probability === "number" && Number.isFinite(probability) &&
+        probability >= 0 && probability <= 1
+          ? probability
+          : null,
+      rationale:
+        typeof rawRationale === "string" && rawRationale.trim().length > 0 &&
+        rawRationale.length <= ANALYSIS_LIMITS.rationaleCharacters
+          ? rawRationale.trim()
+          : "El proveedor no incluyó una justificación válida.",
       activeRuleIds,
-    };
-  });
+      team: typeof rawTeam === "string" && MARKET_TEAMS.includes(rawTeam as MarketTeam)
+        ? rawTeam as MarketTeam
+        : market?.team ?? "both",
+      evidence: parseForecastEvidence(candidate.evidence),
+    });
+  }
+  return verdicts;
 }
