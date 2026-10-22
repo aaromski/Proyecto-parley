@@ -3,9 +3,20 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ANALYSIS_LIMITS,
+  FORECAST_DECISIONS,
+  FORECAST_TYPES,
+  MARKET_TEAMS,
+  MARKET_TYPES,
   RULE_TRIGGERS,
+  inferForecastType,
+  inferMarketTeam,
+  inferMarketType,
   type AnalysisResponse,
+  type ForecastDecisionKind,
+  type ForecastType,
   type Market,
+  type MarketTeam,
+  type MarketType,
   type Rule,
   type RuleTrigger,
   type Verdict,
@@ -33,6 +44,29 @@ const TRIGGER_LABELS: Record<RuleTrigger, string> = {
   fatigueTransition: "Fatiga-transición",
   other: "Otro",
 };
+const MARKET_TYPE_LABELS: Record<MarketType, string> = {
+  corners: "Córners",
+  totalGoals: "Goles totales",
+  teamGoals: "Gol individual",
+  handicap: "Hándicap",
+  generic: "Otro mercado",
+};
+const FORECAST_TYPE_LABELS: Record<ForecastType, string> = {
+  over: "Over",
+  under: "Under",
+  moneyline: "Ganador / 1X2",
+  handicap: "Hándicap",
+};
+const MARKET_TEAM_LABELS: Record<MarketTeam, string> = {
+  home: "Local",
+  away: "Visitante",
+  both: "Ambos equipos",
+};
+const FORECAST_DECISION_LABELS: Record<ForecastDecisionKind, string> = {
+  maintained: "Línea base",
+  upgraded: "Línea escalada",
+  inverted_suggestion: "Tendencia contraria",
+};
 const STAGE_LABELS: Record<AnalysisStage, string> = {
   normalization: "Normalizando y filtrando métricas",
   analysis: "Evaluando mercados y reglas",
@@ -41,6 +75,25 @@ const STAGE_LABELS: Record<AnalysisStage, string> = {
 function copyConfig(config: LocalConfig): LocalConfig {
   return {
     markets: config.markets.map((market) => ({ ...market })),
+    rules: config.rules.map((rule) => ({ ...rule })),
+  };
+}
+
+function migrateConfig(config: LocalConfig): LocalConfig {
+  return {
+    markets: config.markets.map((market) => {
+      const marketType = market.marketType ?? inferMarketType(market.id ?? "", market.name ?? "", market.line ?? "");
+      return {
+        ...market,
+        marketType,
+        forecastType: market.forecastType ?? inferForecastType(
+          marketType,
+          market.line ?? "",
+          market.name ?? "",
+        ),
+        team: market.team ?? inferMarketTeam(marketType, market.id ?? "", market.name ?? "", market.line ?? ""),
+      };
+    }),
     rules: config.rules.map((rule) => ({ ...rule })),
   };
 }
@@ -58,6 +111,9 @@ function validateStoredConfig(value: unknown): value is LocalConfig {
       typeof market.description === "string" && market.description.length <= 2_000 &&
       typeof market.line === "string" && Boolean(market.line.trim()) && market.line.length <= 100 &&
       typeof market.baseCushion === "number" && Number.isFinite(market.baseCushion) && market.baseCushion >= 0 &&
+      (market.marketType === undefined || MARKET_TYPES.includes(market.marketType)) &&
+      (market.forecastType === undefined || FORECAST_TYPES.includes(market.forecastType)) &&
+      (market.team === undefined || MARKET_TEAMS.includes(market.team)) &&
       typeof market.active === "boolean";
   });
   const validRules = candidate.rules.every((item) => {
@@ -120,6 +176,9 @@ function isAnalysisResponse(value: unknown): value is AnalysisResponse {
       if (!candidate || typeof candidate !== "object") return false;
       const item = candidate as Verdict;
       return typeof item.marketId === "string" && typeof item.selection === "string" &&
+        (item.projection === null || (typeof item.projection === "number" && Number.isFinite(item.projection))) &&
+        FORECAST_DECISIONS.includes(item.forecastDecision) &&
+        MARKET_TEAMS.includes(item.team) &&
         typeof item.probability === "number" && Number.isFinite(item.probability) && item.probability >= 0 && item.probability <= 1 &&
         typeof item.rationale === "string" && Array.isArray(item.activeRuleIds) &&
         typeof item.riskSum === "number" && Number.isFinite(item.riskSum) &&
@@ -128,6 +187,12 @@ function isAnalysisResponse(value: unknown): value is AnalysisResponse {
         Array.isArray(item.activeRules) && item.activeRules.every((rule) =>
           typeof rule.id === "string" && typeof rule.name === "string" &&
           RULE_TRIGGERS.includes(rule.trigger) && typeof rule.riskFactor === "number" && Number.isFinite(rule.riskFactor));
+    }) && Array.isArray(response.discardedMarkets) && response.discardedMarkets.every((candidate) => {
+      if (!candidate || typeof candidate !== "object") return false;
+      const item = candidate as AnalysisResponse["discardedMarkets"][number];
+      return typeof item.marketId === "string" &&
+        (item.projection === null || (typeof item.projection === "number" && Number.isFinite(item.projection))) &&
+        typeof item.reason === "string";
     }));
 }
 
@@ -175,8 +240,21 @@ export default function Home() {
         try {
           const parsed: unknown = JSON.parse(stored);
           if (validateStoredConfig(parsed)) {
-            setConfig(copyConfig(parsed));
-            setStorageMessage("Configuración local cargada en este navegador.");
+            const migrated = migrateConfig(parsed);
+            const hasLegacyMarkets = parsed.markets.some((market) =>
+              market.marketType === undefined || market.forecastType === undefined,
+            );
+            setConfig(migrated);
+            if (hasLegacyMarkets) {
+              try {
+                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+                setStorageMessage("Configuración local antigua migrada y guardada en este navegador.");
+              } catch {
+                setStorageMessage("Configuración antigua adaptada para esta sesión; no se pudo guardar la migración local.");
+              }
+            } else {
+              setStorageMessage("Configuración local cargada en este navegador.");
+            }
           } else {
             setStorageNeedsRecovery(true);
             setStorageMessage("La configuración guardada no es válida. Se conserva sin modificar; puedes restaurar los valores iniciales explícitamente.");
@@ -251,7 +329,7 @@ export default function Home() {
     setFormError("");
     setEditorErrors({});
     setEditor(kind === "market"
-      ? { kind, value: { id: "", name: "", description: "", line: "", baseCushion: 0, active: true } }
+      ? { kind, value: { id: "", name: "", description: "", line: "", baseCushion: 0, marketType: "generic", forecastType: "over", team: "both", active: true } }
       : { kind, value: { id: "", name: "", instructions: "", riskFactor: 0, trigger: "other", active: true } });
   }
 
@@ -356,6 +434,9 @@ export default function Home() {
             description: market.description,
             line: market.line,
             baseCushion: market.baseCushion,
+            marketType: market.marketType,
+            forecastType: market.forecastType,
+            team: market.team,
           })),
           rules: rules.map((rule) => ({
             id: rule.id,
@@ -431,9 +512,8 @@ export default function Home() {
         setAnnouncement("El análisis no se completó.");
       } else {
         setResponse(finalResponse);
-        setAnnouncement(finalResponse.verdicts.length
-          ? `Análisis completado. ${finalResponse.verdicts.length} dictámenes recibidos.`
-          : "El análisis terminó sin dictámenes.");
+        const evaluatedMarkets = finalResponse.verdicts.length + finalResponse.discardedMarkets.length;
+        setAnnouncement(`Análisis completado. ${evaluatedMarkets} mercados evaluados, ${finalResponse.verdicts.length} aprobados y ${finalResponse.discardedMarkets.length} descartados o sin proyección.`);
       }
     } catch {
       setAnalysisError("No se pudo completar el análisis por un error de conexión o una respuesta no válida.");
@@ -474,18 +554,19 @@ export default function Home() {
             </section>
 
             <section className="results-section" aria-labelledby="results-title">
-              <div className="results-heading"><div className="section-title-wrap"><span className="section-index section-index-coral">02</span><div><p className="eyebrow">LECTURA</p><h2 id="results-title">Dictámenes</h2></div></div>{response && response.verdicts.length > 0 && <span className="result-count">{response.verdicts.length} recibidos</span>}</div>
+              <div className="results-heading"><div className="section-title-wrap"><span className="section-index section-index-coral">02</span><div><p className="eyebrow">LECTURA</p><h2 id="results-title">Dictámenes</h2></div></div>{response && <span className="result-count">{response.verdicts.length} aprobados · {response.discardedMarkets.length} descartados</span>}</div>
               <div className="stage-track" aria-label="Etapas del análisis">{(["normalization", "analysis"] as const).map((stage, index) => { const active = analysisStage === stage; const completed = analysisStage === "analysis" && index === 0; return <div className={`stage-item${active ? " is-active" : ""}${completed ? " is-complete" : ""}`} key={stage}><span className="stage-number">0{index + 1}</span><span>{STAGE_LABELS[stage]}</span></div>; })}</div>
               <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
               {isAnalyzing && <div className="progress-message" role="status" aria-live="polite"><span className="progress-rule" /><span>{analysisStage ? STAGE_LABELS[analysisStage] : "Preparando el análisis"}</span></div>}
               {analysisError && <div className="error-panel" role="alert"><div><p className="eyebrow">ANÁLISIS NO COMPLETADO</p><p>{analysisError}</p></div><button className="button button-secondary" type="button" onClick={() => void analyzeMatch()} disabled={isAnalyzing}>Reintentar</button></div>}
               {!isAnalyzing && !analysisError && !response && <div className="empty-state"><span className="empty-index" aria-hidden="true">—</span><p>Aún no hay resultados. Introduce los datos del partido y ejecuta el análisis.</p></div>}
-              {response && response.verdicts.length === 0 && <div className="empty-state empty-state-result" role="status"><span className="empty-index" aria-hidden="true">0</span><div><p>La respuesta no incluye dictámenes.</p><span>Revisa los datos del partido o las selecciones activas y vuelve a analizar.</span></div><button className="button button-secondary" type="button" onClick={() => void analyzeMatch()} disabled={isAnalyzing}>Volver a analizar</button></div>}
+              {response && response.verdicts.length === 0 && <div className="empty-state empty-state-result" role="status"><span className="empty-index" aria-hidden="true">0</span><div><p>Ningún mercado superó los criterios para aprobar una jugada.</p><span>Consulta los motivos de descarte y las proyecciones recibidas.</span></div><button className="button button-secondary" type="button" onClick={() => void analyzeMatch()} disabled={isAnalyzing}>Volver a analizar</button></div>}
               {sortedVerdicts.length > 0 && <div className="verdict-list" aria-label="Dictámenes ordenados por probabilidad descendente">{sortedVerdicts.map((verdict, index) => { const market = config.markets.find((item) => item.id === verdict.marketId); return <article className="verdict-row" key={`${verdict.marketId}-${verdict.selection}-${index}`}>
-                <div className="verdict-main"><div className="verdict-title-line"><span className="verdict-rank">{String(index + 1).padStart(2, "0")}</span><div><p className="verdict-market">{market?.name ?? verdict.marketId}</p><h3>{verdict.selection}</h3></div></div><p className="verdict-rationale">{verdict.rationale}</p></div>
-                <div className="verdict-metrics"><div className="probability-metric"><span>Probabilidad</span><strong>{new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 1 }).format(verdict.probability)}</strong></div><div className="cushion-metrics"><div><span>Colchón base</span><strong>{String(verdict.baseCushion)}</strong></div><div><span>Suma de riesgos</span><strong>{String(verdict.riskSum)}</strong></div><div><span>Colchón ajustado</span><strong>{String(verdict.adjustedCushion)}</strong></div></div></div>
+                <div className="verdict-main"><div className="verdict-title-line"><span className="verdict-rank">{String(index + 1).padStart(2, "0")}</span><div><p className="verdict-market">{market?.name ?? verdict.marketId}</p><h3>{verdict.selection}</h3><span className="trigger-label">{FORECAST_DECISION_LABELS[verdict.forecastDecision]} · {MARKET_TEAM_LABELS[verdict.team]}</span></div></div><p className="verdict-rationale">{verdict.rationale}</p></div>
+                <div className="verdict-metrics"><div className="probability-metric"><span>Probabilidad</span><strong>{new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 1 }).format(verdict.probability)}</strong></div><div className="cushion-metrics"><div><span>Proyección</span><strong>{verdict.projection === null ? "No aplica" : String(verdict.projection)}</strong></div><div><span>Colchón base</span><strong>{String(verdict.baseCushion)}</strong></div><div><span>Suma de riesgos</span><strong>{String(verdict.riskSum)}</strong></div><div><span>Colchón ajustado</span><strong>{String(verdict.adjustedCushion)}</strong></div></div></div>
                 <div className="active-rules"><span className="active-rules-label">Reglas y triggers activos</span>{verdict.activeRules.length ? <ul>{verdict.activeRules.map((rule) => <li key={rule.id}><span>{rule.name}</span><span className="trigger-label">{TRIGGER_LABELS[rule.trigger] ?? rule.trigger}</span></li>)}</ul> : <p>Sin reglas activas en este dictamen.</p>}</div>
               </article>; })}</div>}
+              {response && response.discardedMarkets.length > 0 && <section className="discarded-list" aria-labelledby="discarded-title"><h3 id="discarded-title">Mercados descartados o sin evaluación</h3><ul>{response.discardedMarkets.map((item) => { const market = config.markets.find((candidate) => candidate.id === item.marketId); return <li key={item.marketId}><div><strong>{market?.name ?? item.marketId}</strong>{item.projection !== null && <span>Proyección: {item.projection}</span>}</div><p>{item.reason}</p></li>; })}</ul></section>}
               <p className="uncertainty-notice">Las probabilidades son estimaciones sujetas a incertidumbre; no garantizan resultados. El análisis no es asesoramiento financiero ni una recomendación de apuesta. Juega de forma responsable.</p>
               {response && <details className="normalized-details"><summary>Consultar datos normalizados recibidos</summary><pre>{JSON.stringify(response.normalizedData, null, 2)}</pre></details>}
             </section>
@@ -503,7 +584,7 @@ export default function Home() {
 
           <section className="config-group" aria-labelledby="markets-heading"><div className="config-group-heading"><div><p className="eyebrow">01 · SELECCIONES</p><h3 id="markets-heading">Mercados <span>{draft.markets.length}/{ANALYSIS_LIMITS.markets}</span></h3></div><button className="button button-secondary button-compact" type="button" onClick={() => beginCreate("market")}>Añadir mercado</button></div>
             {draft.markets.length === 0 && <p className="config-empty">No hay mercados configurados.</p>}
-            <ul className="config-list">{draft.markets.map((market) => <li key={market.id} className="config-item"><label className="toggle-label"><input type="checkbox" checked={market.active} onChange={(event) => setDraft({ ...draft, markets: draft.markets.map((item) => item.id === market.id ? { ...item, active: event.target.checked } : item) })} /><span className="toggle-copy"><strong>{market.name || "Sin nombre"}</strong><small>{market.line || "Sin línea"} · colchón base {market.baseCushion}</small></span></label><div className="item-actions"><button type="button" className="text-button" onClick={() => beginEdit("market", market.id)}>Editar</button><button type="button" className="text-button text-danger" onClick={() => setDraft({ ...draft, markets: draft.markets.filter((item) => item.id !== market.id) })}>Eliminar</button></div></li>)}</ul>
+            <ul className="config-list">{draft.markets.map((market) => <li key={market.id} className="config-item"><label className="toggle-label"><input type="checkbox" checked={market.active} onChange={(event) => setDraft({ ...draft, markets: draft.markets.map((item) => item.id === market.id ? { ...item, active: event.target.checked } : item) })} /><span className="toggle-copy"><strong>{market.name || "Sin nombre"}</strong><small>{market.line || "Sin línea"} · {MARKET_TEAM_LABELS[market.team]} · colchón base {market.baseCushion}</small></span></label><div className="item-actions"><button type="button" className="text-button" onClick={() => beginEdit("market", market.id)}>Editar</button><button type="button" className="text-button text-danger" onClick={() => setDraft({ ...draft, markets: draft.markets.filter((item) => item.id !== market.id) })}>Eliminar</button></div></li>)}</ul>
           </section>
 
           <section className="config-group" aria-labelledby="rules-heading"><div className="config-group-heading"><div><p className="eyebrow">02 · CRITERIOS</p><h3 id="rules-heading">Reglas <span>{draft.rules.length}/{ANALYSIS_LIMITS.rules}</span></h3></div><button className="button button-secondary button-compact" type="button" onClick={() => beginCreate("rule")}>Añadir regla</button></div>
@@ -521,6 +602,9 @@ export default function Home() {
               {editor.kind === "market" ? <>
                 <label className="form-field form-field-wide">Descripción<textarea rows={3} value={editor.value.description} maxLength={ANALYSIS_LIMITS.descriptionCharacters} aria-invalid={Boolean(editorErrors.description)} aria-describedby={editorErrors.description ? "editor-description-error" : undefined} onChange={(event) => setEditor({ kind: "market", value: { ...editor.value, description: event.target.value }, originalId: editor.originalId })} />{editorErrors.description && <span className="field-error" id="editor-description-error">{editorErrors.description}</span>}</label>
                 <label className="form-field">Línea<input value={editor.value.line} maxLength={ANALYSIS_LIMITS.lineCharacters} aria-invalid={Boolean(editorErrors.line)} aria-describedby={editorErrors.line ? "editor-line-error" : undefined} onChange={(event) => setEditor({ kind: "market", value: { ...editor.value, line: event.target.value }, originalId: editor.originalId })} />{editorErrors.line && <span className="field-error" id="editor-line-error">{editorErrors.line}</span>}</label>
+                <label className="form-field">Tipo de mercado<select value={editor.value.marketType} onChange={(event) => setEditor({ kind: "market", value: { ...editor.value, marketType: event.target.value as MarketType }, originalId: editor.originalId })}>{MARKET_TYPES.map((marketType) => <option key={marketType} value={marketType}>{MARKET_TYPE_LABELS[marketType]}</option>)}</select></label>
+                <label className="form-field">Dirección del pronóstico<select value={editor.value.forecastType} onChange={(event) => setEditor({ kind: "market", value: { ...editor.value, forecastType: event.target.value as ForecastType }, originalId: editor.originalId })}>{FORECAST_TYPES.map((forecastType) => <option key={forecastType} value={forecastType}>{FORECAST_TYPE_LABELS[forecastType]}</option>)}</select></label>
+                <label className="form-field">Equipo<select value={editor.value.team} onChange={(event) => setEditor({ kind: "market", value: { ...editor.value, team: event.target.value as MarketTeam }, originalId: editor.originalId })}>{MARKET_TEAMS.map((team) => <option key={team} value={team}>{MARKET_TEAM_LABELS[team]}</option>)}</select></label>
                 <label className="form-field">Colchón base<input type="number" min="0" step="any" value={editor.value.baseCushion} aria-invalid={Boolean(editorErrors.baseCushion)} aria-describedby={editorErrors.baseCushion ? "editor-cushion-error" : undefined} onChange={(event) => setEditor({ kind: "market", value: { ...editor.value, baseCushion: event.target.value === "" ? Number.NaN : Number(event.target.value) }, originalId: editor.originalId })} />{editorErrors.baseCushion && <span className="field-error" id="editor-cushion-error">{editorErrors.baseCushion}</span>}</label>
               </> : <>
                 <label className="form-field form-field-wide">Instrucciones<textarea rows={3} value={editor.value.instructions} maxLength={ANALYSIS_LIMITS.instructionsCharacters} aria-invalid={Boolean(editorErrors.instructions)} aria-describedby={editorErrors.instructions ? "editor-instructions-error" : undefined} onChange={(event) => setEditor({ kind: "rule", value: { ...editor.value, instructions: event.target.value }, originalId: editor.originalId })} />{editorErrors.instructions && <span className="field-error" id="editor-instructions-error">{editorErrors.instructions}</span>}</label>
