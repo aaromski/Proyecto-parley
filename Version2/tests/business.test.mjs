@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canSaveApprovedPick, evaluateDecision, filterUpcomingFixtures, MARKET_DEFINITIONS, parlayBlockReason } from "../src/lib/analysis.ts";
+import { canSaveApprovedPick, evaluateDecision, filterUpcomingFixtures, MARKET_DEFINITIONS, marketRuleVersion, parlayBlockReason, RISK_MODIFIERS } from "../src/lib/analysis.ts";
 import { buildParlayEvidence } from "../src/lib/server/explanations.ts";
 import { createRequestPacer, FOOTBALL_MIN_REQUEST_INTERVAL_MS, getRetryDelaySeconds, splitUtcDateRange } from "../src/lib/server/football-api-limits.ts";
 import { readSlip, saveApprovedPick, SLIP_STORAGE_KEY } from "../src/lib/slip-store.ts";
@@ -164,6 +164,33 @@ test("market cushions reproduce the supplied protected lines without double coun
     });
     assert.equal(decision.evaluation, "EVALUABLE", marketId);
     assert.equal(decision.verdict, "APROBADO LÍNEA BASE", marketId);
+  }
+});
+
+test("saved market rule versions change when cushions or applicable risk settings change", () => {
+  const market = MARKET_DEFINITIONS.find((definition) => definition.id === "individual_over_0_5");
+  const settings = { ...safeRisks, goal_overs_under_four_days: true };
+  const evidence = { goal_overs_under_four_days: false };
+  const baseVersion = marketRuleVersion(market.id, { enabled: true, baseCushion: market.baseCushion, rule: null }, settings, evidence);
+  const changedCushion = marketRuleVersion(market.id, { enabled: true, baseCushion: 0.9, rule: null }, settings, evidence);
+  const changedRisk = marketRuleVersion(market.id, { enabled: true, baseCushion: market.baseCushion, rule: null }, { ...settings, goal_overs_under_four_days: false }, evidence);
+  const changedEvidence = marketRuleVersion(market.id, { enabled: true, baseCushion: market.baseCushion, rule: null }, settings, { goal_overs_under_four_days: true });
+  const unknownEvidence = marketRuleVersion(market.id, { enabled: true, baseCushion: market.baseCushion, rule: null }, settings, { goal_overs_under_four_days: null });
+  const disabledMarket = marketRuleVersion(market.id, { enabled: false, baseCushion: market.baseCushion, rule: null }, settings, evidence);
+  assert.notEqual(baseVersion, changedCushion);
+  assert.notEqual(baseVersion, changedRisk);
+  assert.notEqual(baseVersion, changedEvidence);
+  assert.notEqual(baseVersion, unknownEvidence);
+  assert.notEqual(changedEvidence, unknownEvidence);
+  assert.notEqual(baseVersion, disabledMarket);
+
+  const originalModifier = RISK_MODIFIERS.goal_overs_under_four_days.modifier;
+  try {
+    RISK_MODIFIERS.goal_overs_under_four_days.modifier = originalModifier + 0.01;
+    const changedModifier = marketRuleVersion(market.id, { enabled: true, baseCushion: market.baseCushion, rule: null }, settings, evidence);
+    assert.notEqual(baseVersion, changedModifier);
+  } finally {
+    RISK_MODIFIERS.goal_overs_under_four_days.modifier = originalModifier;
   }
 });
 

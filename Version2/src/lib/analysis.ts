@@ -61,6 +61,15 @@ export const RISK_MODIFIERS: Record<RiskFactorId, { label: string; modifier: num
   opponent_duels_and_clearances: { label: "Rival: duelos > 52% y despejes > 28%", modifier: 0.1, markets: ["simple_win"] },
 };
 
+export function marketRuleVersion(marketId: MarketId, config: MarketConfig, riskSettings: RiskSettings, riskEvidence: RiskEvidence = {}): string {
+  const market = MARKET_DEFINITIONS.find((definition) => definition.id === marketId)!;
+  const risks = (Object.entries(RISK_MODIFIERS) as Array<[RiskFactorId, (typeof RISK_MODIFIERS)[RiskFactorId]]>)
+    .filter(([, definition]) => definition.markets.includes(marketId))
+    .map(([id, definition]) => `${id}:${riskSettings[id] !== false ? "on" : "off"}:${definition.modifier}:${riskEvidence[id] ?? "unknown"}`)
+    .join(",");
+  return `market-v2:${marketId}:${config.enabled ? "enabled" : "disabled"}:${market.line}:${market.metric}:${market.direction}:${config.baseCushion ?? "unset"}:${risks}`;
+}
+
 export function evaluateMarket(input: {
   marketId: MarketId;
   config: MarketConfig | undefined;

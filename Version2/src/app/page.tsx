@@ -5,6 +5,7 @@ import {
   canSaveApprovedPick,
   evaluateDecision,
   MARKET_DEFINITIONS,
+  marketRuleVersion,
   parlayBlockReason as getParlayBlockReason,
   RISK_MODIFIERS,
   type MarketConfig,
@@ -372,6 +373,15 @@ export default function HomePage() {
     return decision;
   }
 
+  function isCurrentSelection(selection: SlipSelection): boolean {
+    return selection.ruleVersion === marketRuleVersion(
+      selection.marketId,
+      preferences.markets[selection.marketId],
+      preferences.riskSettings,
+      riskEvidence(),
+    );
+  }
+
   function saveSelection(marketId: MarketId, decision: MarketDecision) {
     if (!match || !canSaveApprovedPick(decision)) return;
     const side = marketSides[marketId];
@@ -391,7 +401,7 @@ export default function HomePage() {
       marketName: MARKET_DEFINITIONS.find((market) => market.id === marketId)!.name,
       selectionId,
       verdict: decision.verdict as SlipSelection["verdict"],
-      ruleVersion: "regla-local-configurada-v1",
+      ruleVersion: marketRuleVersion(marketId, preferences.markets[marketId], preferences.riskSettings, riskEvidence()),
       savedAt: new Date().toISOString(),
     };
     if (!storageReady) return;
@@ -454,7 +464,7 @@ export default function HomePage() {
   }
 
   async function requestParlayExplanation() {
-    const selected = slip.filter((selection) => parlayIds.includes(selection.id));
+    const selected = slip.filter((selection) => parlayIds.includes(selection.id) && isCurrentSelection(selection));
     if (!selected.length) return;
     setParlayLoading(true);
     setParlayError("");
@@ -478,8 +488,13 @@ export default function HomePage() {
     const definition = MARKET_DEFINITIONS.find((market) => market.id === marketId)!;
     const decision = decisionFor(marketId);
     const metric = metricsFor(marketSides[marketId])[definition.metric];
-    const threshold = definition.line + (preferences.markets[marketId].baseCushion ?? 0);
-    const ruleLabel = `${METRIC_LABELS[definition.metric]} ≥ ${threshold.toLocaleString("es-ES", { maximumFractionDigits: 2 })} (línea ${definition.line.toLocaleString("es-ES", { maximumFractionDigits: 2 })} + colchón)`;
+    const baseThreshold = definition.line + (preferences.markets[marketId].baseCushion ?? 0);
+    const effectiveThreshold = decision.evaluation === "EVALUABLE" && decision.threshold !== null && decision.adjustedCushion !== null
+      ? decision.threshold + decision.adjustedCushion
+      : null;
+    const ruleLabel = effectiveThreshold === null
+      ? `${METRIC_LABELS[definition.metric]} ≥ ${baseThreshold.toLocaleString("es-ES", { maximumFractionDigits: 2 })} antes del ajuste de riesgo; evidencia pendiente`
+      : `${METRIC_LABELS[definition.metric]} ≥ ${effectiveThreshold.toLocaleString("es-ES", { maximumFractionDigits: 2 })} con colchón ajustado ${decision.adjustedCushion!.toLocaleString("es-ES", { maximumFractionDigits: 3 })}`;
     const riskInfo = riskEvidence();
     const selectionLabel = marketId === "double_chance"
       ? marketSides[marketId] === "home" ? "Local o empate" : "Visitante o empate"
@@ -531,7 +546,7 @@ export default function HomePage() {
     );
   };
 
-  const selectedParlay = slip.filter((selection) => parlayIds.includes(selection.id));
+  const selectedParlay = slip.filter((selection) => parlayIds.includes(selection.id) && isCurrentSelection(selection));
   const seasonOptions = Array.from({ length: 5 }, (_, index) => 2024 + index);
   const activeDetail = selectedMatchId !== null;
 
@@ -634,7 +649,7 @@ export default function HomePage() {
                   <div className="setting-row" key={market.id}>
                     <div><h3>{market.name}</h3><p>{`${METRIC_LABELS[market.metric]} ≥ ${market.line.toLocaleString("es-ES", { maximumFractionDigits: 2 })} antes del colchón de riesgo.`}</p></div>
                     <div className="field"><label htmlFor={`cushion-${market.id}`}>Colchón base requerido</label><input id={`cushion-${market.id}`} type="number" min="0" step="any" value={config.baseCushion ?? ""} placeholder="Requerido" onChange={(event) => { const raw = event.target.value; const value = raw === "" ? null : Number(raw); if (value !== null && (!Number.isFinite(value) || value < 0)) return; persistPreferences({ ...preferences, markets: { ...preferences.markets, [market.id]: { ...config, baseCushion: value } } }); }} /><span className="metric-note">Se aplica como colchón base × (1 + factores activados).</span></div>
-                    <label className="risk-setting"><input type="checkbox" checked={config.enabled} onChange={(event) => persistPreferences({ ...preferences, markets: { ...preferences.markets, [market.id]: { ...config, enabled: event.target.checked } } })} /><span><strong>Incluir en análisis</strong><p>Desactiva el mercado sin borrar su configuración.</p></span></label>
+                    <label className="risk-setting"><input type="checkbox" checked={config.enabled} onChange={(event) => persistPreferences({ ...preferences, markets: { ...preferences.markets, [market.id]: { ...config, enabled: event.target.checked } } })} /><span><strong>Evaluar mercado</strong><p>Al desactivarlo, el mercado permanece visible pero no se calcula.</p></span></label>
                   </div>
                 );
               })}
@@ -656,7 +671,7 @@ export default function HomePage() {
             {storageMessage && <div className="notice" role="status">{storageMessage}</div>}
             {slip.length ? <ul className="slip-list">{slip.map((selection) => (
               <li className="slip-item" key={selection.id}>
-                <div><strong>{selection.teamName} · {selection.marketName}</strong><p>{selection.opponentName} · {selection.competitionName} · {matchTime(selection.kickoff, timeZone)}</p><p>{selection.verdict} · regla {selection.ruleVersion}</p></div>
+                <div><strong>{selection.teamName} · {selection.marketName}</strong><p>{selection.opponentName} · {selection.competitionName} · {matchTime(selection.kickoff, timeZone)}</p><p>{selection.verdict} · {isCurrentSelection(selection) ? "Regla vigente" : "Regla anterior · no válida para combinadas"}</p></div>
                 <button className="button secondary small" type="button" onClick={() => removeSelection(selection.id)}>Quitar</button>
               </li>
             ))}</ul> : <div className="empty-state"><h3>El Slip está vacío</h3><p>Los mercados actuales no cuentan con datos/reglas suficientes para aprobar selecciones. La vista completa de análisis sigue disponible en Partidos.</p><button className="button secondary small" type="button" onClick={() => setView("matches")}>Ir a Partidos</button></div>}
@@ -664,10 +679,11 @@ export default function HomePage() {
             <section className="parlay-box" aria-labelledby="parlay-title">
               <div className="section-title"><div><p className="eyebrow">Constructor</p><h2 id="parlay-title">Combinada</h2><p>Máximo cuatro equipos distintos. Selecciones incompatibles quedan bloqueadas.</p></div><span className="tag">{selectedParlay.length}/4 equipos</span></div>
               {slip.length ? <div className="candidate-list">{slip.map((candidate) => {
-                const selected = parlayIds.includes(candidate.id);
-                const selectedOther = slip.filter((item) => parlayIds.includes(item.id) && item.id !== candidate.id);
-                const reason = selected ? null : getParlayBlockReason(candidate, selectedOther);
-                return <label className="candidate" key={candidate.id}><input type="checkbox" checked={selected} disabled={!selected && Boolean(reason)} onChange={(event) => setParlayIds((current) => event.target.checked ? [...current, candidate.id] : current.filter((id) => id !== candidate.id))} /><span><strong>{candidate.teamName} · {candidate.marketName}</strong><p>{candidate.opponentName} · {candidate.verdict}{reason ? ` · Bloqueado: ${reason}` : ""}</p></span></label>;
+                const current = isCurrentSelection(candidate);
+                const selected = current && parlayIds.includes(candidate.id);
+                const selectedOther = slip.filter((item) => parlayIds.includes(item.id) && item.id !== candidate.id && isCurrentSelection(item));
+                const reason = !current ? "Regla anterior: vuelve a evaluar" : selected ? null : getParlayBlockReason(candidate, selectedOther);
+                return <label className="candidate" key={candidate.id}><input type="checkbox" checked={selected} disabled={!current || (!selected && Boolean(reason))} onChange={(event) => setParlayIds((currentIds) => event.target.checked ? [...currentIds, candidate.id] : currentIds.filter((id) => id !== candidate.id))} /><span><strong>{candidate.teamName} · {candidate.marketName}</strong><p>{candidate.opponentName} · {candidate.verdict}{reason ? ` · Bloqueado: ${reason}` : ""}</p></span></label>;
               })}</div> : <p className="empty-inline">Añade picks aprobados desde un análisis para construir una combinada.</p>}
               <div className="button-row"><button className="button" type="button" disabled={parlayLoading || selectedParlay.length === 0 || selectedParlay.length > 4} onClick={() => void requestParlayExplanation()}>{parlayLoading ? "Solicitando explicación…" : "Explicar combinada"}</button><span className="metric-note">El servidor vuelve a validar cada selección; Gemini no aprueba picks.</span></div>
               {parlayError && <div className="inline-error" role="alert" style={{ marginTop: 12 }}><p>{parlayError}</p><button className="button secondary small" type="button" onClick={() => void requestParlayExplanation()}>Reintentar</button></div>}
